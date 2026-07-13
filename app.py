@@ -1,18 +1,9 @@
 import streamlit as st
 import io
 import re
-import subprocess
-import sys
+import zipfile
+import xml.etree.ElementTree as ET
 from collections import defaultdict
-
-# Tenta instalar o python-docx automaticamente
-try:
-    import docx
-except ImportError:
-    st.warning("📦 Instalando a biblioteca python-docx...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-docx"])
-    import docx
-    st.success("✅ Biblioteca instalada com sucesso!")
 
 # --- CONFIG ---
 st.set_page_config(
@@ -29,17 +20,35 @@ O sistema verificará rapidamente os principais **requisitos quantitativos e est
 
 uploaded_file = st.file_uploader("📎 Escolha o arquivo .docx do projeto", type=["docx"])
 
-# --- FUNÇÕES DE CHEGAGEM ---
-def extrair_texto(docx_bytes):
-    """Extrai texto de um arquivo .docx"""
+# --- FUNÇÕES DE EXTRAÇÃO SEM PYTHON-DOCX ---
+def extrair_texto_zip(docx_bytes):
+    """Extrai texto de um arquivo .docx usando zipfile (sem necessidade de python-docx)"""
     try:
-        doc = docx.Document(io.BytesIO(docx_bytes))
-        texto_completo = "\n".join([p.text for p in doc.paragraphs])
-        return texto_completo
+        text = []
+        with zipfile.ZipFile(io.BytesIO(docx_bytes)) as docx_zip:
+            # O texto está no arquivo document.xml
+            with docx_zip.open('word/document.xml') as xml_file:
+                tree = ET.parse(xml_file)
+                root = tree.getroot()
+                
+                # Namespace do Word
+                ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+                
+                # Extrai todo o texto dos parágrafos
+                for paragraph in root.findall('.//w:p', ns):
+                    para_text = []
+                    for text_node in paragraph.findall('.//w:t', ns):
+                        if text_node.text:
+                            para_text.append(text_node.text)
+                    if para_text:
+                        text.append(' '.join(para_text))
+        
+        return '\n'.join(text)
     except Exception as e:
         st.error(f"Erro ao extrair texto: {e}")
         return ""
 
+# --- FUNÇÕES DE CHEGAGEM ---
 def checar_docentes(texto):
     """Verifica requisitos do corpo docente"""
     resultados = []
@@ -236,6 +245,18 @@ def checar_assimetrias_regionais(texto):
         resultados.append("ℹ️ Assimetrias regionais não mencionadas (opcional, mas valorizado).")
     return resultados
 
+def checar_politicas_inclusao(texto):
+    """Verifica políticas de inclusão"""
+    resultados = []
+    palavras_chave = ["inclusão", "afirmativa", "acessibilidade", "cotas", "pcd", "deficiência"]
+    encontrou = any(re.search(palavra, texto, re.IGNORECASE) for palavra in palavras_chave)
+    
+    if encontrou:
+        resultados.append("✅ Políticas de inclusão/afirmativas mencionadas.")
+    else:
+        resultados.append("ℹ️ Políticas de inclusão não mencionadas (opcional, mas valorizado).")
+    return resultados
+
 def avaliar_projeto(texto):
     """Avalia todos os aspectos do projeto"""
     avaliacao = {
@@ -248,6 +269,7 @@ def avaliar_projeto(texto):
         "📜 Regimento": checar_regimento(texto),
         "🔗 Interdisciplinaridade": checar_interdisciplinaridade(texto),
         "🌎 Assimetrias Regionais": checar_assimetrias_regionais(texto),
+        "🤝 Políticas de Inclusão": checar_politicas_inclusao(texto),
     }
     
     # Adiciona EaD se aplicável
@@ -260,7 +282,7 @@ def avaliar_projeto(texto):
 if uploaded_file:
     try:
         with st.spinner("🔍 Processando o arquivo..."):
-            texto = extrair_texto(uploaded_file.getvalue())
+            texto = extrair_texto_zip(uploaded_file.getvalue())
         
         if not texto.strip():
             st.warning("⚠️ O arquivo parece estar vazio ou não contém texto legível.")
@@ -334,6 +356,7 @@ else:
         - 🏛️ **Infraestrutura:** biblioteca, laboratórios, salas, internet
         - 🔄 **Autoavaliação:** política e metodologia definidas
         - 📜 **Regimento:** anexado à proposta
+        - 🔗 **Interdisciplinaridade:** abordagem clara
         """)
 
 # --- RODAPÉ ---
